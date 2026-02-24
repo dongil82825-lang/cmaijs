@@ -360,29 +360,64 @@ def analyze_page_detail(image_base64, query, retrieved_docs):
     except Exception as e:
         return f"분석 오류 발생: {e}"
 
+
+def identify_discipline(image_base64):
+    """
+    도면의 시각적 정보를 바탕으로 공종(Discipline)을 분류합니다.
+    """
+    prompt = """
+    이 도면의 타이틀 블록이나 구성 요소를 보고 다음 중 가장 적합한 공종 하나만 선택하세요:
+    [건축, 기계, 전기, 조경, 토목, 건설사업관리법규]
+    결과는 오직 단어 하나(예: 건축)만 출력하세요.
+    """
+    message = HumanMessage(content=[
+        {"type": "text", "text": prompt},
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}},
+    ])
+    try:
+        discipline = llm_vision.invoke([message]).content.strip()
+        # 유효성 체크
+        valid_disciplines = ["건축", "기계", "전기", "조경", "토목", "건설사업관리법규"]
+        for d in valid_disciplines:
+            if d in discipline: return d
+        return "일반"
+    except:
+        return "일반"
+
 def generate_final_report(file_name, page_results):
     raw_data = ""
+    disciplines = set()
     for item in page_results:
-        raw_data += f"\n[Page {item['page']}]: {item['content']}\n"
+        raw_data += f"\n[Page {item['page']} ({item.get('discipline', '일반')})]: {item['content']}\n"
+        disciplines.add(item.get('discipline', '일반'))
     
     current_date = datetime.now().strftime("%Y년 %m월 %d일")
-    
-    # 보고서 생성 시에도 1974년 노후 건물 증축이라는 맥락을 유지하게 함
-    prompt = f"""
-    당신은 건설사업관리단장(CM단장)입니다. 
+    discipline_str = ", ".join(list(disciplines))
 
-    [작성 가이드]
-    - 프로젝트명은 별도 언급 없으면 '{file_name}'으로 기재하세요.
+    prompt = f"""
+    당신은 숙련된 건설사업관리단장(CM단장)입니다. 
+    분석된 도면 내용과 검색된 관련 시방서/법규 기준을 대조하여 최종 기술검토 보고서를 작성하세요.
+
+    [검토 대상 공종]: {discipline_str}
+
+    [보고서 작성 가이드]
+    - 프로젝트명: '{file_name}'
+    - 핵심 임무: 도면의 내용이 **표준시방서(KCS) 및 건설기술진흥법** 등 관련 법규에 부합하는지 엄격히 검토.
+    - 기술적 근거: DB에서 검색된 기준(시방서 수치, 허용 오차 등)을 인용하여 부적합 사항을 지적할 것.
 
     [분석 데이터]
     {raw_data}
     
     [보고서 형식]
     1. 도면명: {file_name}
-    2. 작성 일자: {current_date}
-    3. 작성자: AI 건설 지원 시스템 (구조 안전 특화)
-    4. 검토 총평: (노후 건축물 증축에 따른 구조적 리스크와 보강 대책 요약)
-    5. 주요 검토 내용 (항목별 요약): ...
+    2. 검토 일자: {current_date}
+    3. 검토 공종: {discipline_str}
+    4. 종합 기술 검토 의견: (공종별 인터페이스 및 설계 완성도 총평)
+    5. 주요 기술적 검토 내용 (공종별 분류):
+       - 현황 및 부적합 사항 (DB 기준 대비)
+       - 시공 시 발생 가능한 리스크
+       - 시방서 및 법규에 따른 보완 대책
+    6. CM 단장 지시 사항: (현장 관리자 및 설계자에게 전달할 긴급 조치 사항)
     """
     return llm_text.invoke(prompt).content
 
@@ -644,9 +679,30 @@ if uploaded_files:
                         
                         st.session_state.current_image_base64 = img_base64 # 최신 이미지 유지
                         
-                        # 분석 실행
-                        res = analyze_page_detail(img_base64, "위험 요소 식별", [])
-                        page_results.append({"page": curr_page, "content": res})
+                        # --- [수정된 로직 시작] ---
+
+                        # 1. 도면 공종(카테고리) 판별
+                        # 이 함수는 제가 위에 드린 'identify_discipline' 함수가 정의되어 있어야 작동합니다.
+                        discipline = identify_discipline(img_base64) 
+                        status.write(f"  └ {curr_page}페이지 공종 판별: **{discipline}**")
+
+                        # 2. 관련 시방서/법규 DB 검색 (RAG 연동)
+                        # 사용자의 질문(query) 대신 판별된 공종을 키워드로 검색합니다.
+                        search_query = f"{discipline} 공사 표준시방서 시공 기준 및 건설법규"
+                        retrieved_docs = retrieve_and_rerank(search_query, top_k=5) 
+
+                        # 3. 전문 분석 실행
+                        # 검색된 법규(retrieved_docs)를 분석 함수에 전달하여 대조 분석하게 합니다.
+                        res = analyze_page_detail(img_base64, f"{discipline} 분야 전문 기술 검토", retrieved_docs)
+
+                        # 4. 결과 저장 (공종 정보를 함께 저장하여 보고서에 활용)
+                        page_results.append({
+                            "page": curr_page, 
+                            "content": res, 
+                            "discipline": discipline
+                        })
+
+                        # --- [수정된 로직 끝] ---
                         
                         # [핵심] 메모리 강제 해제
                         # 변수 참조를 제거하고 가비지 컬렉터를 호출합니다.
