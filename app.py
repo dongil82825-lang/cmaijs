@@ -597,8 +597,20 @@ if uploaded_files:
                     # PDF 정보만 먼저 가져오기 (전체 로드 X)
                     import pdf2image
                     # pdf_info_to_dict 대신 pdf_info를 사용합니다.
-                    info = pdf2image.pdf_info(tmp_path, poppler_path=POPPLER_PATH)
-                    total_pages = info["Pages"]
+                    try:
+                        # 1. 가장 일반적인 방식 시도
+                        from pdf2image.pdf2image import pdf_info
+                        info = pdf_info(tmp_path, poppler_path=POPPLER_PATH)
+                        total_pages = info["Pages"]
+                    except:
+                        try:
+                            # 2. 다른 경로의 내부 함수 시도
+                            info = pdf2image.pdf_info(tmp_path, poppler_path=POPPLER_PATH)
+                            total_pages = info["Pages"]
+                        except:
+                            # 3. 위 방법들이 모두 실패하면 전체 페이지를 변환하여 개수 확인 (가장 확실함)
+                            pages = convert_from_path(tmp_path, first_page=1, last_page=100, poppler_path=POPPLER_PATH)
+                            total_pages = len(pages)
                     
                     page_results = []
                     progress = st.progress(0)
